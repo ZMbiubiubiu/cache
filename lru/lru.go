@@ -1,3 +1,6 @@
+// 实现lru策略的in-memory cache
+// 抽象缓存值为任意实现Value接口的对象
+
 package lru
 
 import (
@@ -54,7 +57,7 @@ func (c *Cache) Get(key string) (value Value, ok bool) {
 
 func (c *Cache) Set(key string, value Value) error {
 	// 不能设置过大的键值对
-	if len(key)+value.Len() > int(c.maxBytes) {
+	if c.maxBytes != 0 && len(key)+value.Len() > int(c.maxBytes) {
 		return ErrTooLargeEntry
 	}
 	ele, ok := c.cache[key]
