@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"cache/helper"
+	"cache/singleflight"
 )
 
 // LocalGetter 用户自己实现各自加载数据功能，用于查找缓存失败时从本地加载
@@ -33,6 +34,9 @@ type Group struct {
 	localGetter LocalGetter // load data from local
 	peerPicker  PeerPicker  // load data from other server
 	// 如何选择远端服务呢，一般采用一致性hash的方法，通过key确定远端服务地址
+
+	//
+	singleflight *singleflight.SingleFlight
 }
 
 func GetGroup(name string) *Group {
@@ -52,9 +56,10 @@ func NewGroup(name string, maxBytes int64, getter LocalGetter) *Group {
 		panic("already exists group")
 	}
 	group = &Group{
-		name:        name,
-		localGetter: getter,
-		mainCache:   NewCache(maxBytes),
+		name:         name,
+		localGetter:  getter,
+		mainCache:    NewCache(maxBytes),
+		singleflight: &singleflight.SingleFlight{},
 	}
 	// add group to global groups
 	groups[name] = group
@@ -83,16 +88,23 @@ func (g *Group) Get(key string) (Byteview, error) {
 }
 
 func (g *Group) load(key string) (value Byteview, err error) {
-	if g.peerPicker != nil {
-		if getter, ok := g.peerPicker.PickPeer(key); ok {
-			if value, err = g.loadFromPeer(getter, key); err == nil {
-				log.Printf("key[%s] get from peer success", key)
-				return value, nil
+	viewi, err := g.singleflight.Do(key, func() (interface{}, error) {
+		if g.peerPicker != nil {
+			if getter, ok := g.peerPicker.PickPeer(key); ok {
+				if value, err = g.loadFromPeer(getter, key); err == nil {
+					log.Printf("key[%s] get from peer success", key)
+					return value, nil
+				}
 			}
 		}
-	}
 
-	return g.loadFromLocal(key)
+		return g.loadFromLocal(key)
+	})
+
+	if err == nil {
+		return viewi.(Byteview), nil
+	}
+	return Byteview{}, err
 }
 
 func (g *Group) loadFromLocal(key string) (Byteview, error) {
